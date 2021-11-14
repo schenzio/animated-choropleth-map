@@ -1,0 +1,233 @@
+<!DOCTYPE html>
+<html>
+    <head>
+        <script src="d3.js"></script>
+        <meta name="viewport" content="initial-scale=1.0, width=device-width" /> 
+        <script src="topojson.v1.min.js"></script>
+        <style>
+            @media screen and (min-width: 250px) {
+                #controller{
+                    top: 700px;
+                }
+                #monthBox{
+                    font-size: 1em;
+                    margin: 10px 0px;
+                }
+            }
+            @media screen and (min-width: 480px) {
+                #controller{
+                    top: 270px;
+                    right: 8%;
+                    text-align: right;
+                    font-weight: bold;
+                }
+                #monthBox{
+                    font-size: 1.35em;
+                }
+            }
+            @media screen and (min-width: 720px) and (orientation: landscape) {
+                #controller{
+                    top: 225px;
+                    right: 16%;
+                }
+                #monthBox{
+                    font-size: 1.7em;
+                    letter-spacing: 0.8px;
+                    margin-bottom: 25px;
+                }
+            }
+
+            body{
+                color: #3a3a3a;
+                font-family: Helvetica,Arial,sans-serif;
+            }
+            #container {
+                width: 100%;
+            }
+            #tooltip {
+                border: solid 1px black;
+                padding: 5px;
+                display: none;
+                background-color: white;
+                position: absolute;
+            }
+            input{
+                padding: 2px;
+                background: gainsboro;
+            }
+            input:hover{
+                background-color:ivory;
+            }
+            #controller{
+                position: absolute;
+            }
+            text {
+                color: #3a3a3a;
+                font-size: 2rem;
+                letter-spacing: 0.4;
+                font-family: sans-serif;
+            }
+            .legend{
+                font-size: 1em;
+            }
+            #source{
+                position: absolute;
+                top: 796px;
+            }
+            #tooltip{
+                padding: 5px;
+                border-radius: 3px;
+            }
+
+        </style>
+    </head>
+    <body>
+       <h2>Dove gli stranieri senza tessera sanitaria hanno accesso al vaccino?</h2>
+        <p>
+            A maggio, la vaccinazione era negata ai titolari di Stp, Eni e codici fiscali provvisori in quasi tutto il paese.
+            Oggi, 4 regioni permettono loro di prenotare il vaccino direttamente dal sito, in 8 regioni è possibile prenotare su
+            richiesta (con moduli o a numeri verdi), mentre 4 regioni hanno organizzato altre modalità di vaccinazione 
+            (open day, ambulatori itineranti, gestioni diverse in base all'ASL). In 4 regioni non è ancora stata adottata nessuna misura.
+        </p>
+        <svg id="container" width=500 height=600 viewBox="0 0 500 600" preserveAspectratio="xMidYMin">
+            <g id="body">
+            </g>
+        </svg>
+        <div id="controller"></div>
+        <div id="tooltip">
+        </div>
+        <div id="source"><b>Fonte</b>: 
+            <a href="https://github.com/schenzio/dataset-dataninja-msf/blob/main/aggiornamento%20mensile%20-%20regioni%20aperte%20ai%20vaccini%20Stp.csv">
+            monitoraggio portali di prenotazione regioni, ASL e media</a>
+        </div>
+    </body>
+    <script>
+        let body = d3.select("#body");
+        let controller = d3.select("#controller");
+        Promise.all([ 
+            d3.json("regioni.topo.json"),
+            d3.csv("vaccini-Stp-regioni.csv")
+        ])
+        .then(showData);
+        function showData(dataSources){
+            let mapInfo = dataSources[0];
+            let data = dataSources[1];       
+            let regions = topojson.feature(mapInfo, mapInfo.objects.regioni).features;
+            let colorList = ["#86D37D", "#85B1F2", "#FCE860", "#FF835B"];
+            let vaxAvaiability = ["su prenotazione", "altre modalità", "su richiesta",  "no"]
+            let attList = Object.keys(data[0]); //lista colonne csv
+            let monthList = attList.splice(2,5); //lista dei mesi
+            let exec = 0;
+            let stop = false;
+            let currentMonth = "";
+            
+            //creo pulsanti per la gestione dell'animazione e un box che mostra il mese corrente
+            controller.append("div")
+                .attr("id", "monthBox")
+            controller.append("input")
+                .attr("type", "image")
+                .attr("src", "play.svg")
+                .on("click", ()=> {stop= false; timeout()})
+            controller.append("input")
+                .attr("type", "image")
+                .attr("src", "stop.svg")
+                .on("click", ()=>stop=true)
+            controller.append("input")
+                .attr("type", "image")
+                .attr("src", "replay.svg")
+                .on("click", ()=> {exec=0; stop=false; timeout()})
+
+            //aggiungo alle properties degli oggetti del json solo le colonne dei mesi
+            regions = regions.map(d=>{
+                for (let row of data){
+                    if (d.properties.DEN_REG == row.Regione){//FORSE INUTILE
+                        for (let k in row){
+                            if (monthList.includes(k))
+                                d.properties[k] = row[k] 
+                        }
+                    }
+                }
+                return d;
+            })
+            //console.log(regions);
+
+            //creo scala cromatica ordinale
+            let colorScale = d3.scaleOrdinal()
+                .range(colorList)
+                .domain(vaxAvaiability);
+            
+            //creo la proiezione e il geopath e disegno la mappa
+            let projection = d3.geoMercator()
+                .scale(2400)
+                .translate([-280, 2253])           
+
+            let path = d3.geoPath()
+                .projection(projection);
+
+            let regionShapes = body.selectAll("path")
+                .data(regions)
+                .enter()
+                .append("path")
+                .attr("d", d=>path(d))
+                .attr("stroke", "#fff")
+                .attr("stroke-width", 0.5)
+                .on("mouseenter", function(d) {
+                        this.style.stroke = "#000";
+                        this.style.strokeWidth = 1.5;
+                        showTooltip([d.properties.DEN_REG, d.properties[currentMonth]], [d3.event.clientX, d3.event.clientY])
+                    })
+                    .on("mousemouve", function(d) {
+                        showTooltip([d.properties.DEN_REG, d.properties[currentMonth]], [d3.event.clientX, d3.event.clientY])
+                    })
+                    .on("mouseleave", function(d) {
+                        this.style.stroke = "#fff";
+                        this.style.strokeWidth = 0.5;
+                        d3.select("#tooltip").style("display", "none");
+                    })
+            
+            function changeMap(month){
+                regionShapes.attr("fill", d => colorScale(d.properties[month]))
+                d3.select("#monthBox").text(month);
+                currentMonth = month;
+            }
+            
+            function timeout () {
+                setTimeout(function () {
+                    //il contatore viene incrementato; se ha raggiunto l'ultimo mese la funzione si stoppa, altrimenti viene rinvocata
+                    if (exec==monthList.length || stop){
+                        return
+                    }
+                    changeMap(monthList[exec]);
+                    exec++;
+                    timeout();
+                    }, 2000);
+            }
+            createLegend(5, 7, colorList, vaxAvaiability)
+            changeMap(monthList[0])
+            timeout()
+        }
+
+        function createLegend(x, y, colors, values){
+            for (let c in colors) {            
+                body.append("circle")
+                    .attr("r", 6)
+                    .attr("fill", colors[c])
+                    .attr("cx", x)
+                    .attr("cy", y)
+                body.append("text")
+                    .text(values[c])
+                    .attr("class", "legend")
+                    .attr("x", x+8)
+                    .attr("y", y+4)
+                x+=140;
+            }
+        }
+
+        function showTooltip(text, coords){
+                d3.select("#tooltip").text(text[0]+": "+ text[1])
+                    .style("top", coords[1]+"px")
+                    .style("left", coords[0]+"px")
+                    .style("display", "block")
+        }
+    </script>
+</html>
